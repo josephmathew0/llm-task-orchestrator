@@ -265,8 +265,9 @@ Run all migrations:
 docker compose exec backend alembic upgrade head
 Enum changes (such as adding cancelled) are handled explicitly using:
 
-ALTER TYPE ... ADD VALUE
-Design Decisions & Tradeoffs
+ALTER TYPE ... ADD VALUE  
+
+### Design Decisions & Tradeoffs
 Why polling instead of WebSockets?
 Simpler implementation
 
