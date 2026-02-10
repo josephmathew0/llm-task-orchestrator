@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.env
+.venv
+venv/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+
+# DB / local state
+*.sqlite
+redis-data/
+postgres-data/
