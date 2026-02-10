@@ -214,27 +214,36 @@ All endpoints are automatically documented via **Swagger UI**.
 
 ## Running Locally
 
+Build and start all services using Docker Compose:
+
 ```bash
 docker compose up -d --build
-Services Started
-backend
+```
 
-scheduler
+## Services Started
+The following containers will be launched:
 
-worker
+backend – FastAPI API server
 
-postgres
+scheduler – Delayed task scheduler
 
-redis
+worker – RQ background worker
 
-Testing
-API (curl)
+postgres – PostgreSQL database
+
+redis – Redis queue backend
+
+## Testing
+#### API (curl)
+List all tasks:
+
 curl http://localhost:8000/tasks
-UI
-Visit:
+#### UI
+Visit the frontend in your browser:
 
 http://localhost:3000
-You can:
+
+### From the UI you can:
 
 Create tasks
 
@@ -244,12 +253,14 @@ Cancel tasks
 
 Chain tasks
 
-Database Access
+### Database Access
+Connect directly to PostgreSQL:
+
 docker compose exec postgres psql -U app -d app
 Migrations
-Alembic handles schema changes.
+Alembic handles all schema changes.
 
-Example:
+Run all migrations:
 
 docker compose exec backend alembic upgrade head
 Enum changes (such as adding cancelled) are handled explicitly using:
@@ -257,15 +268,15 @@ Enum changes (such as adding cancelled) are handled explicitly using:
 ALTER TYPE ... ADD VALUE
 Design Decisions & Tradeoffs
 Why polling instead of WebSockets?
-Simpler
+Simpler implementation
 
-Deterministic
+Deterministic behavior
 
 Adequate for task-oriented workloads
 
 Easy to reason about during interviews
 
-Why RQ instead of Celery?
+### Why RQ instead of Celery?
 Lightweight
 
 Explicit control over retries
@@ -279,7 +290,7 @@ Enables delayed execution
 
 Mirrors real production job systems
 
-Known Limitations (Intentional)
+### Known Limitations (Intentional)
 No authentication / multi-tenant support
 
 No hard LLM cancellation (provider-dependent)
@@ -288,9 +299,9 @@ No metrics stack (Prometheus / OpenTelemetry)
 
 No distributed tracing
 
-These are explicitly excluded to keep the scope focused.
+These are intentionally excluded to keep the scope focused.
 
-What This Demonstrates
+### What This Demonstrates
 Clean architecture
 
 Correct concurrency handling
@@ -303,6 +314,6 @@ Strong separation of concerns
 
 Thoughtful tradeoffs
 
-Author
-Joseph Mathew
+## Author
+# Joseph Mathew
 Built as part of a Vinci4D Software Engineer take-home assignment.
