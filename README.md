@@ -48,8 +48,8 @@ This project is intentionally scoped to demonstrate **system design, correctness
 
 Each task progresses through a well-defined state machine:
 
-scheduled → queued → running → completed
-└──→ failed
+scheduled → queued → running → completed  
+└──→ failed  
 └──→ cancelled
 
 
