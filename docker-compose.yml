@@ -1,3 +1,5 @@
+# docker-compose.yml
+
 services:
   postgres:
     image: postgres:16
@@ -7,6 +9,8 @@ services:
       POSTGRES_DB: app
     ports:
       - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d app"]
       interval: 5s
@@ -17,6 +21,20 @@ services:
     image: redis:7
     ports:
       - "6379:6379"
+
+  # Runs DB migrations once at startup.
+  # Everything else waits on this completing successfully.
+  migrate:
+    build: ./backend
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@postgres:5432/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["bash", "-lc", "alembic upgrade head"]
+    restart: "no"
 
   backend:
     build: ./backend
@@ -35,6 +53,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
 
   worker:
     build: ./backend
@@ -50,6 +70,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
 
   scheduler:
     build: ./backend
@@ -64,3 +86,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:

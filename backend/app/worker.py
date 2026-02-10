@@ -1,3 +1,5 @@
+# backend/app/worker.py
+
 from redis import Redis
 from rq import Queue
 from app.settings import settings
