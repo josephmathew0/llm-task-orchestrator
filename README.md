@@ -137,6 +137,105 @@ All state transitions are **persisted in PostgreSQL** and treated as the **singl
 
 ---
 
+## Codebase Walkthrough (Backend + Frontend)
+
+This section explains the **flow of the system** and what each major file is responsible for, so reviewers can quickly map the architecture to the implementation.
+
+---
+
+### Backend (`backend/app`)
+
+**Request → Database → Queue → Worker → Database → UI polling**
+
+#### API Layer
+
+- **`backend/app/main.py`**
+  - FastAPI application entrypoint.
+  - Defines all HTTP endpoints:
+    - create task
+    - list tasks
+    - get task
+    - chain task
+    - retry task
+    - cancel task
+  - Enqueues tasks that should run immediately.
+  - Leaves scheduled tasks for the scheduler to enqueue later.
+
+- **`backend/app/schemas.py`**
+  - Pydantic request/response models.
+  - Defines the API contract used by the frontend.
+  - Provides validation and OpenAPI documentation.
+
+#### Persistence Layer
+
+- **`backend/app/models.py`**
+  - SQLAlchemy ORM models.
+  - Defines the `Task` table and `TaskStatus` enum.
+  - `status` is the single source of truth for task lifecycle.
+
+- **`backend/app/crud.py`**
+  - Encapsulates all database operations.
+  - Normalizes timestamps to UTC.
+  - Determines initial task status (`scheduled` vs `queued`).
+  - Implements safe, idempotent task cancellation.
+
+- **`backend/app/db.py`**
+  - Database engine and session management.
+  - Provides `SessionLocal` and `get_db` dependency.
+
+#### Background Processing
+
+- **`backend/app/scheduler.py`**
+  - Dedicated scheduler loop.
+  - Periodically scans for due tasks (`scheduled_for <= now`).
+  - Uses `FOR UPDATE SKIP LOCKED` to safely claim tasks.
+  - Transitions tasks from `scheduled → queued` before enqueueing.
+
+- **`backend/app/jobs.py`**
+  - RQ worker entrypoint (`execute_task`).
+  - Executes the LLM call.
+  - Handles retries, failures, and best-effort cancellation.
+  - Ensures idempotency by checking terminal states.
+
+- **`backend/app/worker.py`**
+  - Defines the Redis/RQ queue used by the API and scheduler.
+
+- **`backend/app/llm.py`**
+  - LLM client abstraction.
+  - Uses a mock provider for this assignment.
+  - Single integration point for swapping real providers later.
+
+#### Migrations
+
+- **`backend/alembic/versions/*`**
+  - Alembic migration scripts.
+  - Includes explicit enum migration for adding `cancelled` to `TaskStatus`.
+
+---
+
+### Frontend (`frontend/src/app`)
+
+**UI → API fetch → render → poll while active**
+
+- **`frontend/src/app/page.tsx`**
+  - Home page.
+  - Create tasks (immediate or scheduled).
+  - Displays task list and status.
+  - Polls only while tasks are active.
+
+- **`frontend/src/app/tasks/[id]/pageToRoute.tsx`**
+  - Next.js route wrapper.
+  - Extracts task ID from URL and renders the client component.
+
+- **`frontend/src/app/tasks/[id]/TaskDetailClient.tsx`**
+  - Task detail view.
+  - Shows metadata, prompt, output, and errors.
+  - Allows chaining tasks with optional scheduling.
+  - Polls task state while active.
+  - Supports retry and cancellation actions.
+
+---
+
 ## Database Design
 
 ### Tasks Table
@@ -268,14 +367,15 @@ Enum changes (such as adding cancelled) are handled explicitly using:
 ALTER TYPE ... ADD VALUE  
 
 ### Design Decisions & Tradeoffs
-Why polling instead of WebSockets?
-Simpler implementation
+Why polling instead of WebSockets?  
 
-Deterministic behavior
+- Simpler implementation
 
-Adequate for task-oriented workloads
+- Deterministic behavior
 
-Easy to reason about during interviews
+- Adequate for task-oriented workloads
+
+- Easy to reason about during interviews
 
 ### Why RQ instead of Celery?
 Lightweight
@@ -314,6 +414,43 @@ Production-safe background job patterns
 Strong separation of concerns
 
 Thoughtful tradeoffs
+
+## What I’d Improve With Another Day
+
+With additional time, I would focus on production-hardening and developer experience improvements.
+
+### Persistence & Safety
+- Add Docker volumes for PostgreSQL to persist tasks across restarts.
+- Add explicit database reset / migrate scripts for local development.
+
+### Cancellation Improvements
+- Persist optional cancellation reasons.
+- Integrate cooperative cancellation with LLM providers that support it.
+- Surface clearer cancellation state in the UI.
+
+### Observability
+- Replace `print()` with structured logging.
+- Add request IDs to correlate API and worker logs.
+- Introduce metrics for task throughput, retries, and latency.
+
+### Reliability
+- Add a watchdog for stuck `running` tasks.
+- Enforce maximum execution time per task.
+- Improve scheduler resilience with backoff and jitter.
+
+### UX Enhancements
+- Cancel and retry buttons directly in the task list.
+- Advanced filtering (status, scheduled time, chains).
+- Better empty and error states.
+
+### Authentication & Multi-Tenancy
+- API keys or JWT-based authentication.
+- Per-user task ownership and isolation.
+
+### Testing
+- Unit tests for lifecycle transitions.
+- Integration tests for scheduler + worker flows.
+- Failure and cancellation edge-case coverage.
 
 ## Author
 # Joseph Mathew

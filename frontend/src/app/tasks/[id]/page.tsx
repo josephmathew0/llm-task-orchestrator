@@ -1,4 +1,4 @@
-// frontend/src/app/tasks/[id]/pageToRoute.tsx
+// frontend/src/app/tasks/[id]/page.tsx
 
 import TaskDetailClient from './TaskDetailClient';
 
