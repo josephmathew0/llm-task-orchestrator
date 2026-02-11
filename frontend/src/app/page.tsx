@@ -56,6 +56,11 @@ function isTerminalStatus(status: string) {
   return s === 'completed' || s === 'failed' || s === 'cancelled';
 }
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
 function StatusPill({ status }: { status: string }) {
   const s = formatStatus(status);
 
@@ -166,8 +171,8 @@ export default function HomePage() {
       const data = await res.json();
       setTasks(data);
       if (!silent) setError(null);
-    } catch (err: any) {
-      if (!silent) setError(err?.message ?? 'Failed to fetch tasks');
+    } catch (err: unknown) {
+      if (!silent) setError(getErrorMessage(err, 'Failed to fetch tasks'));
     } finally {
       if (!silent) setLoading(false);
     }
@@ -205,8 +210,8 @@ export default function HomePage() {
       setTimeout(() => {
         fetchTasks({ silent: true }).catch(() => {});
       }, 400);
-    } catch (err: any) {
-      setCancelError(err?.message ?? 'Failed to cancel task');
+    } catch (err: unknown) {
+      setCancelError(getErrorMessage(err, 'Failed to cancel task'));
     } finally {
       setCancellingId(null);
     }
@@ -215,7 +220,6 @@ export default function HomePage() {
   // Initial load
   useEffect(() => {
     fetchTasks();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Poll while there are active tasks (queued/running/scheduled)
@@ -232,7 +236,6 @@ export default function HomePage() {
     }, 1200);
 
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldPoll]);
 
   const filtered = useMemo(() => {
@@ -313,8 +316,8 @@ export default function HomePage() {
       setPrompt('');
       setRunMode('now');
       setScheduledLocal('');
-    } catch (err: any) {
-      setCreateError(err?.message ?? 'Failed to create task');
+    } catch (err: unknown) {
+      setCreateError(getErrorMessage(err, 'Failed to create task'));
     } finally {
       setCreating(false);
     }

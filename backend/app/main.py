@@ -93,7 +93,7 @@ def api_list_tasks(
 # Get task by id
 # ------------------------------------------------------------------------------
 @app.get("/tasks/{task_id}", response_model=TaskOut)
-def api_get_task(task_id: str, db: Session = Depends(get_db)):
+def api_get_task(task_id: uuid.UUID, db: Session = Depends(get_db)):
     """
     Fetch a single task by UUID.
     """

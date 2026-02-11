@@ -2,7 +2,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 type Task = {
   id: string;
@@ -139,6 +139,11 @@ function statusDotColor(status: string) {
   return 'rgba(255,255,255,0.55)';
 }
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
 export default function TaskDetailClient({ id }: { id: string }) {
   const [task, setTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
@@ -165,13 +170,13 @@ export default function TaskDetailClient({ id }: { id: string }) {
     return isActiveStatus(task.status);
   }, [task]);
 
-  async function fetchTask() {
+  const fetchTask = useCallback(async () => {
     const res = await fetch(`${API_BASE}/tasks/${id}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(`Failed to fetch task (${res.status})`);
     const data = (await res.json()) as Task;
     setTask(data);
     setErrorMsg(null);
-  }
+  }, [id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -180,8 +185,8 @@ export default function TaskDetailClient({ id }: { id: string }) {
       try {
         setLoading(true);
         await fetchTask();
-      } catch (e: any) {
-        if (!cancelled) setErrorMsg(e?.message ?? 'Unknown error');
+      } catch (e: unknown) {
+        if (!cancelled) setErrorMsg(getErrorMessage(e, 'Unknown error'));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -191,8 +196,7 @@ export default function TaskDetailClient({ id }: { id: string }) {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [fetchTask]);
 
   // Poll while task is active (queued/running/scheduled)
   useEffect(() => {
@@ -203,8 +207,7 @@ export default function TaskDetailClient({ id }: { id: string }) {
     }, 1200);
 
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shouldPoll, id]);
+  }, [shouldPoll, fetchTask]);
 
   async function chainTask(payload: ChainPayload) {
     setIsChaining(true);
@@ -228,8 +231,8 @@ export default function TaskDetailClient({ id }: { id: string }) {
 
       const child = (await res.json()) as Task;
       window.location.href = `/tasks/${child.id}`;
-    } catch (e: any) {
-      setChainError(e?.message ?? 'Unknown error');
+    } catch (e: unknown) {
+      setChainError(getErrorMessage(e, 'Unknown error'));
     } finally {
       setIsChaining(false);
     }
@@ -266,8 +269,8 @@ export default function TaskDetailClient({ id }: { id: string }) {
       setTimeout(() => {
         fetchTask().catch(() => {});
       }, 400);
-    } catch (e: any) {
-      setCancelError(e?.message ?? 'Unknown error');
+    } catch (e: unknown) {
+      setCancelError(getErrorMessage(e, 'Unknown error'));
     } finally {
       setIsCancelling(false);
     }
@@ -481,8 +484,8 @@ export default function TaskDetailClient({ id }: { id: string }) {
                       instruction: instruction.trim(),
                       scheduled_for,
                     });
-                  } catch (e: any) {
-                    setChainError(e?.message ?? 'Invalid schedule time');
+                  } catch (e: unknown) {
+                    setChainError(getErrorMessage(e, 'Invalid schedule time'));
                   }
                 }}
                 disabled={chainDisabled}

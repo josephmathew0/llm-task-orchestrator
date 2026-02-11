@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import UUID
 
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
@@ -36,9 +38,14 @@ def execute_task(task_id: str) -> None:
         * Uses Task.attempts and Task.max_attempts
         * Re-enqueues only if task is not cancelled and attempts < max_attempts
     """
+    try:
+        task_pk = UUID(str(task_id))
+    except (TypeError, ValueError):
+        return
+
     db: Session = SessionLocal()
     try:
-        task: Optional[Task] = db.get(Task, task_id)
+        task: Optional[Task] = db.get(Task, task_pk)
         if not task:
             return
 
@@ -51,24 +58,29 @@ def execute_task(task_id: str) -> None:
         if task.status == TaskStatus.scheduled:
             return
 
-        # Cancellation check BEFORE marking running:
-        # This covers the common case: cancelled while queued.
-        if task.status == TaskStatus.cancelled:
-            task.finished_at = task.finished_at or _utcnow()
-            db.commit()
+        # Atomic claim: only one worker may transition queued -> running.
+        # This prevents duplicate execution if the same task is enqueued twice.
+        claim_stmt = (
+            update(Task)
+            .where(Task.id == task_pk)
+            .where(Task.status == TaskStatus.queued)
+            .values(
+                attempts=(func.coalesce(Task.attempts, 0) + 1),
+                status=TaskStatus.running,
+                error=None,
+                started_at=func.coalesce(Task.started_at, func.now()),
+            )
+            .returning(Task.id)
+        )
+        claimed = db.execute(claim_stmt).scalar_one_or_none()
+        if claimed is None:
+            db.rollback()
             return
 
-        # ----------------------------------------------------------------------
-        # Transition to running (single source of truth stored in DB)
-        # ----------------------------------------------------------------------
-        # We increment attempts when we begin an execution attempt.
-        task.attempts = (task.attempts or 0) + 1
-        task.status = TaskStatus.running
-        task.error = None
-        if task.started_at is None:
-            task.started_at = _utcnow()
         db.commit()
-        db.refresh(task)
+        task = db.get(Task, task_pk)
+        if not task:
+            return
 
         # If the task was cancelled immediately after we set running,
         # bail out without doing work.
@@ -111,9 +123,9 @@ def execute_task(task_id: str) -> None:
     except Exception as e:
         # Persist error + decide retry vs fail.
         # We intentionally swallow exceptions so RQ doesn't mark the job as failed;
-        # task status is the source of truth for orchestration.
+            # task status is the source of truth for orchestration.
         try:
-            task = db.get(Task, task_id)
+            task = db.get(Task, task_pk)
             if not task:
                 return
 

@@ -89,5 +89,12 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  backend-tests:
+    build: ./backend
+    profiles: ["test"]
+    volumes:
+      - ./backend:/app
+    command: ["bash", "-lc", "pytest -q"]
+
 volumes:
   postgres_data:

@@ -1,457 +1,243 @@
 # Vinci4D Mini LLM Task Orchestrator
 
-A minimal, production-oriented **LLM task orchestration system** supporting:
+Minimal LLM task orchestration system with:
 
 - Immediate and scheduled execution
-- Background processing with retries
-- Task chaining
-- Task cancellation
-- Real-time UI updates via polling
-- Clean separation of concerns (API / scheduler / worker)
+- Background workers with retry logic
+- Task chaining from parent output
+- Best-effort cancellation
+- Next.js UI with live polling
 
-This project is intentionally scoped to demonstrate **system design, correctness, and maintainability** rather than raw feature breadth.
+This repo is intentionally scoped for system design clarity over feature breadth.
 
----
+## Architecture
 
-## High-Level Architecture
+```text
+Frontend (Next.js)
+        |
+        v
+   FastAPI API  -----> PostgreSQL (task state source of truth)
+        |
+        v
+   Redis / RQ Queue <----- Scheduler (moves due scheduled tasks to queue)
+        |
+        v
+      Worker (executes LLM calls, persists outputs/errors)
+```
 
-┌────────────┐ HTTP ┌──────────────┐
-│ Frontend │ ──────────────▶ │ FastAPI │
-│ (Next.js) │ │ Backend │
-└────────────┘ └──────┬───────┘
+## Task Lifecycle
 
-                                   DB writes / reads
-                                         
-                                  ┌──────────────┐
-                                  │  PostgreSQL  │
-                                  │   (Tasks)   │
-                                  └──────────────┘
-                                         
-                           enqueue jobs / scheduling
-                                         
-    ┌──────────────┐      Redis      ┌──────────────┐
-    │  Scheduler   │ ──────────────▶ │   RQ Queue   │
-    └──────────────┘                 └──────┬───────┘
-                                              
-                                     executes tasks
-                                              
-                                     ┌──────────────┐
-                                     │    Worker    │
-                                     │  (RQ worker)│
-                                     └──────────────┘
+`scheduled -> queued -> running -> completed`
 
----
+Failure/termination paths:
 
-## Core Concepts
+- `running -> queued` (retry path while attempts remain)
+- `running -> failed` (retries exhausted)
+- `scheduled|queued|running -> cancelled` (best effort for `running`)
 
-### Task Lifecycle
+Status meanings:
 
-Each task progresses through a well-defined state machine:
+- `scheduled`: future `scheduled_for`
+- `queued`: ready for worker pickup
+- `running`: active worker attempt
+- `completed`: terminal success
+- `failed`: terminal failure
+- `cancelled`: terminal user cancellation
 
-scheduled → queued → running → completed  
-└──→ failed  
-└──→ cancelled
-
-
-**State meanings:**
-
-- **scheduled** – Has a future `scheduled_for`
-- **queued** – Ready for execution
-- **running** – Actively executed by a worker
-- **completed** – Successfully finished
-- **failed** – Retries exhausted
-- **cancelled** – User-initiated terminal state
-
-All state transitions are **persisted in PostgreSQL** and treated as the **single source of truth**.
-
----
-
-## Features
-
-### 1. Immediate & Scheduled Tasks
-
-- Tasks without `scheduled_for` are queued immediately
-- Future tasks are picked up by a **dedicated scheduler process**
-- Scheduler uses `FOR UPDATE SKIP LOCKED` to prevent double execution
-
----
-
-### 2. Background Execution
-
-- Implemented using **Redis + RQ**
-- Workers are **stateless and idempotent**
-- Safe to scale horizontally
-
----
-
-### 3. Retries
-
-- Configurable `max_attempts`
-- `attempts` increment only when execution starts
-- Retry logic lives **inside the worker**, not RQ
-
----
-
-### 4. Task Chaining
-
-- Child tasks inherit the parent task’s output
-- Enforced constraint: **parent must be completed with output**
-- Scheduling rules apply to chained tasks as well
-
----
-
-### 5. Task Cancellation
-
-- Supported for **scheduled, queued, and running** tasks
-- **scheduled / queued** → never executed
-- **running** → best-effort cancellation
-- Cancellation is **idempotent and terminal**
-
----
-
-### 6. Frontend (Next.js)
-
-- Live polling **only while tasks are active**
-- Immediate optimistic UI updates
-- Clear task status visualization
-- Chain + cancel controls in task detail view
-
----
-
-## Technology Stack
+## Repository Map
 
 ### Backend
 
-- **FastAPI** – REST API
-- **SQLAlchemy 2.0** – ORM
-- **PostgreSQL 16** – Persistence
-- **Alembic** – Schema migrations
-- **Redis + RQ** – Background jobs
-- **Docker Compose** – Local orchestration
+- `backend/app/main.py`: FastAPI routes
+- `backend/app/models.py`: SQLAlchemy models and `TaskStatus`
+- `backend/app/crud.py`: DB operations and lifecycle helpers
+- `backend/app/jobs.py`: worker execution and retry behavior
+- `backend/app/scheduler.py`: scheduled task claiming loop
+- `backend/app/llm.py`: mock/openai provider abstraction
+- `backend/alembic/versions`: DB migrations
 
 ### Frontend
 
-- **Next.js (App Router)**
-- Client-side polling
-- No external UI libraries (intentional simplicity)
+- `frontend/src/app/page.tsx`: task list + create form
+- `frontend/src/app/tasks/[id]/page.tsx`: task detail route
+- `frontend/src/app/tasks/[id]/TaskDetailClient.tsx`: detail UI + chain/cancel actions
 
----
+## Prerequisites
 
-## Codebase Walkthrough (Backend + Frontend)
+- Docker + Docker Compose
+- Node.js 20+ and npm (for local frontend dev)
+- Python 3.11+ (optional, only for non-Docker backend runs)
 
-This section explains the **flow of the system** and what each major file is responsible for, so reviewers can quickly map the architecture to the implementation.
+## Run Modes
 
----
+### Mode A: Docker backend stack + local frontend
 
-### Backend (`backend/app`)
-
-**Request → Database → Queue → Worker → Database → UI polling**
-
-#### API Layer
-
-- **`backend/app/main.py`**
-  - FastAPI application entrypoint.
-  - Defines all HTTP endpoints:
-    - create task
-    - list tasks
-    - get task
-    - chain task
-    - retry task
-    - cancel task
-  - Enqueues tasks that should run immediately.
-  - Leaves scheduled tasks for the scheduler to enqueue later.
-
-- **`backend/app/schemas.py`**
-  - Pydantic request/response models.
-  - Defines the API contract used by the frontend.
-  - Provides validation and OpenAPI documentation.
-
-#### Persistence Layer
-
-- **`backend/app/models.py`**
-  - SQLAlchemy ORM models.
-  - Defines the `Task` table and `TaskStatus` enum.
-  - `status` is the single source of truth for task lifecycle.
-
-- **`backend/app/crud.py`**
-  - Encapsulates all database operations.
-  - Normalizes timestamps to UTC.
-  - Determines initial task status (`scheduled` vs `queued`).
-  - Implements safe, idempotent task cancellation.
-
-- **`backend/app/db.py`**
-  - Database engine and session management.
-  - Provides `SessionLocal` and `get_db` dependency.
-
-#### Background Processing
-
-- **`backend/app/scheduler.py`**
-  - Dedicated scheduler loop.
-  - Periodically scans for due tasks (`scheduled_for <= now`).
-  - Uses `FOR UPDATE SKIP LOCKED` to safely claim tasks.
-  - Transitions tasks from `scheduled → queued` before enqueueing.
-
-- **`backend/app/jobs.py`**
-  - RQ worker entrypoint (`execute_task`).
-  - Executes the LLM call.
-  - Handles retries, failures, and best-effort cancellation.
-  - Ensures idempotency by checking terminal states.
-
-- **`backend/app/worker.py`**
-  - Defines the Redis/RQ queue used by the API and scheduler.
-
-- **`backend/app/llm.py`**
-  - LLM client abstraction.
-  - Uses a mock provider for this assignment.
-  - Single integration point for swapping real providers later.
-
-#### Migrations
-
-- **`backend/alembic/versions/*`**
-  - Alembic migration scripts.
-  - Includes explicit enum migration for adding `cancelled` to `TaskStatus`.
-
----
-
-### Frontend (`frontend/src/app`)
-
-**UI → API fetch → render → poll while active**
-
-- **`frontend/src/app/page.tsx`**
-  - Home page.
-  - Create tasks (immediate or scheduled).
-  - Displays task list and status.
-  - Polls only while tasks are active.
-
-- **`frontend/src/app/tasks/[id]/pageToRoute.tsx`**
-  - Next.js route wrapper.
-  - Extracts task ID from URL and renders the client component.
-
-- **`frontend/src/app/tasks/[id]/TaskDetailClient.tsx`**
-  - Task detail view.
-  - Shows metadata, prompt, output, and errors.
-  - Allows chaining tasks with optional scheduling.
-  - Polls task state while active.
-  - Supports retry and cancellation actions.
-
----
-
-## Database Design
-
-### Tasks Table
-
-Key fields:
-
-- `status` → PostgreSQL ENUM  
-  (`scheduled | queued | running | completed | failed | cancelled`)
-- `scheduled_for` → timezone-aware UTC timestamp
-- `attempts / max_attempts` → retry control
-- `parent_task_id` → self-referential FK for chaining
-
-### Why PostgreSQL ENUM?
-
-- Strong data integrity
-- Explicit lifecycle constraints
-- Migration-backed evolution (e.g. adding `cancelled`)
-
----
-
-## Scheduler Design
-
-- Runs as a **separate container**
-- Polls every `POLL_SECONDS`
-- Claims tasks atomically using row-level locking
-- Enqueues jobs **only after DB commit**
-- Safe to run multiple schedulers concurrently
-
----
-
-## Worker Design
-
-- Stateless, idempotent execution
-- Checks for cancellation:
-  - before execution
-  - after LLM generation
-- Does **not** rely on RQ retry semantics
-- Database status is authoritative
-
----
-
-## API Endpoints
-
-### Health
-GET /health
-
-
-### Create Task
-POST /tasks
-
-
-### List Tasks
-GET /tasks
-
-
-### Get Task
-GET /tasks/{id}
-
-
-### Chain Task
-POST /tasks/{id}/chain
-
-
-### Retry Failed Task
-POST /tasks/{id}/retry
-
-
-### Cancel Task
-POST /tasks/{id}/cancel
-
-
-All endpoints are automatically documented via **Swagger UI**.
-
----
-
-## Running Locally
-
-Build and start all services using Docker Compose:
+Start DB, Redis, API, worker, scheduler:
 
 ```bash
 docker compose up -d --build
 ```
 
-## Services Started
-The following containers will be launched:
+Start frontend separately:
 
-backend – FastAPI API server
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-scheduler – Delayed task scheduler
+URLs:
 
-worker – RQ background worker
+- API: `http://localhost:8000`
+- API docs: `http://localhost:8000/docs`
+- Frontend: `http://localhost:3000`
 
-postgres – PostgreSQL database
+### Mode B: Backend only with Docker
 
-redis – Redis queue backend
+```bash
+docker compose up -d --build postgres redis migrate backend worker scheduler
+```
 
-## Testing
-#### API (curl)
-List all tasks:
+Use curl/Postman against `http://localhost:8000`.
 
-curl http://localhost:8000/tasks
-#### UI
-Visit the frontend in your browser:
+## Environment Variables
 
-http://localhost:3000
+Backend defaults live in `backend/app/settings.py`.
 
-### From the UI you can:
+Key variables:
 
-Create tasks
+- `DATABASE_URL` (default: `postgresql+psycopg://app:app@localhost:5432/app`)
+- `REDIS_URL` (default: `redis://localhost:6379/0`)
+- `LLM_PROVIDER` (`mock` or `openai`, default `mock`)
+- `OPENAI_API_KEY` (required when `LLM_PROVIDER=openai`)
+- `OPENAI_MODEL` (default: `gpt-4o-mini`)
 
-Schedule tasks
+In Docker Compose, service-level environment already points backend/worker/scheduler to container hosts.
 
-Cancel tasks
+## API Endpoints
 
-Chain tasks
+- `GET /health`: health check
+- `POST /tasks`: create immediate or scheduled task
+- `GET /tasks`: list tasks (`limit`, `offset`, optional `parent_task_id`)
+- `GET /tasks/{task_id}`: get one task
+- `POST /tasks/{task_id}/chain`: create child task from completed parent output
+- `POST /tasks/{task_id}/retry`: retry failed task
+- `POST /tasks/{task_id}/cancel`: cancel task
 
-### Database Access
-Connect directly to PostgreSQL:
+Swagger: `http://localhost:8000/docs`
 
-docker compose exec postgres psql -U app -d app
-Migrations
-Alembic handles all schema changes.
+## API Quick Examples
 
-Run all migrations:
+Create immediate task:
 
+```bash
+curl -X POST http://localhost:8000/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Summarize notes",
+    "prompt": "Summarize this text in 3 bullets",
+    "scheduled_for": null
+  }'
+```
+
+Create scheduled task (UTC):
+
+```bash
+curl -X POST http://localhost:8000/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Run later",
+    "prompt": "Write a short status update",
+    "scheduled_for": "2026-02-11T18:30:00Z"
+  }'
+```
+
+List tasks:
+
+```bash
+curl "http://localhost:8000/tasks?limit=50&offset=0"
+```
+
+Retry a failed task:
+
+```bash
+curl -X POST http://localhost:8000/tasks/<task_id>/retry \
+  -H "Content-Type: application/json" \
+  -d '{"max_attempts": 5}'
+```
+
+Cancel a task:
+
+```bash
+curl -X POST http://localhost:8000/tasks/<task_id>/cancel
+```
+
+## Database and Migrations
+
+Run migrations in Docker:
+
+```bash
 docker compose exec backend alembic upgrade head
-Enum changes (such as adding cancelled) are handled explicitly using:
+```
 
-ALTER TYPE ... ADD VALUE  
+Open psql:
 
-### Design Decisions & Tradeoffs
-Why polling instead of WebSockets?  
+```bash
+docker compose exec postgres psql -U app -d app
+```
 
-- Simpler implementation
+## Quality Checks
 
-- Deterministic behavior
+Backend compile check:
 
-- Adequate for task-oriented workloads
+```bash
+python -m compileall backend/app
+```
 
-- Easy to reason about during interviews
+Backend tests (first run after dependency changes):
 
-### Why RQ instead of Celery?
-Lightweight
+```bash
+docker compose up -d --build backend
+```
 
-Explicit control over retries
+```bash
+docker compose exec backend pytest -q
+```
 
-Easier mental model for take-home scope
+Alternative via compose test profile:
 
-Why a separate scheduler?
-Clean responsibility boundaries
+```bash
+docker compose --profile test run --rm backend-tests
+```
 
-Enables delayed execution
+Frontend lint:
 
-Mirrors real production job systems
+```bash
+npm -C frontend run lint
+```
 
-### Known Limitations (Intentional)
-No authentication / multi-tenant support
+## CI
 
-No hard LLM cancellation (provider-dependent)
+Backend tests run automatically in GitHub Actions on push (main/master) and pull requests.
 
-No metrics stack (Prometheus / OpenTelemetry)
+- Workflow: `.github/workflows/backend-tests.yml`
+- Command run in CI: `pytest backend/tests -q`
 
-No distributed tracing
+## Design Choices
 
-These are intentionally excluded to keep the scope focused.
+- Polling instead of WebSockets for simpler state sync in take-home scope
+- Retry orchestration in application logic instead of RQ-native retries
+- Separate scheduler process to handle delayed execution cleanly
+- Postgres-backed status transitions as system source of truth
 
-### What This Demonstrates
-Clean architecture
+## Current Limitations
 
-Correct concurrency handling
-
-Explicit lifecycle modeling
-
-Production-safe background job patterns
-
-Strong separation of concerns
-
-Thoughtful tradeoffs
-
-## What I’d Improve With Another Day
-
-With additional time, I would focus on production-hardening and developer experience improvements.
-
-### Persistence & Safety
-- Add Docker volumes for PostgreSQL to persist tasks across restarts.
-- Add explicit database reset / migrate scripts for local development.
-
-### Cancellation Improvements
-- Persist optional cancellation reasons.
-- Integrate cooperative cancellation with LLM providers that support it.
-- Surface clearer cancellation state in the UI.
-
-### Observability
-- Replace `print()` with structured logging.
-- Add request IDs to correlate API and worker logs.
-- Introduce metrics for task throughput, retries, and latency.
-
-### Reliability
-- Add a watchdog for stuck `running` tasks.
-- Enforce maximum execution time per task.
-- Improve scheduler resilience with backoff and jitter.
-
-### UX Enhancements
-- Cancel and retry buttons directly in the task list.
-- Advanced filtering (status, scheduled time, chains).
-- Better empty and error states.
-
-### Authentication & Multi-Tenancy
-- API keys or JWT-based authentication.
-- Per-user task ownership and isolation.
-
-### Testing
-- Unit tests for lifecycle transitions.
-- Integration tests for scheduler + worker flows.
-- Failure and cancellation edge-case coverage.
+- No auth or multi-tenant boundaries
+- No hard cancellation for in-flight provider calls
+- No metrics/tracing stack
+- Backend tests exist, but coverage can be expanded further
 
 ## Author
-# Joseph Mathew
+
+Joseph Mathew  
 Built as part of a Vinci4D Software Engineer take-home assignment.
