@@ -68,6 +68,49 @@ Status meanings:
 - Node.js 20+ and npm (for local frontend dev)
 - Python 3.11+ (optional, only for non-Docker backend runs)
 
+## Documentation/Delivery
+
+### 1. Set up the database
+
+Start infrastructure and services:
+
+```bash
+docker compose up -d --build
+```
+
+Apply migrations:
+
+```bash
+docker compose exec backend alembic upgrade head
+```
+
+### 2. Generate or compile `.proto` files
+
+This project does not use protobuf/gRPC, so no `.proto` generation step is required.
+
+### 3. Run the Python server
+
+With Docker:
+
+```bash
+docker compose up -d --build backend
+```
+
+Without Docker (from `backend/`):
+
+```bash
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Required runtime environment variables:
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `LLM_PROVIDER` (`mock` or `openai`)
+- `OPENAI_API_KEY` (required only when `LLM_PROVIDER=openai`)
+- `OPENAI_MODEL` (optional override)
+
 ## Run Modes
 
 ### Mode A: Docker backend stack + local frontend
@@ -229,6 +272,29 @@ Backend tests run automatically in GitHub Actions on push (main/master) and pull
 - Retry orchestration in application logic instead of RQ-native retries
 - Separate scheduler process to handle delayed execution cleanly
 - Postgres-backed status transitions as system source of truth
+
+## Thoughtfulness
+
+### Approach
+
+- Keep task status in PostgreSQL as the single source of truth.
+- Separate responsibilities by process: API, scheduler, and worker.
+- Keep delayed execution explicit in scheduler logic and immediate execution explicit in API.
+- Keep retry/cancel behavior in application logic so lifecycle rules remain visible and testable.
+
+### Why this approach
+
+- Clear boundaries reduce accidental coupling and make failure modes easier to reason about.
+- DB-backed lifecycle transitions simplify observability and state recovery.
+- Explicit orchestration logic is easier to review than hidden framework defaults for this scope.
+
+## What I’d Improve With Another Day
+
+- Add more backend integration tests around scheduler claiming and migration edge cases.
+- Introduce structured logging and request/task correlation IDs.
+- Add production CORS/env hardening and container health/readiness checks.
+- Add CI job for frontend lint/build in addition to backend tests.
+- Add basic auth/ownership model for multi-user safety.
 
 ## Current Limitations
 
